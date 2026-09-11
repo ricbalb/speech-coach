@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Speech Coach</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f172a; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .card { background: #1e293b; padding: 2rem; border-radius: 1rem; width: 85%; max-width: 400px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; }
+        input { width: 90%; padding: 0.8rem; margin: 0.5rem 0; border-radius: 0.5rem; border: none; font-size: 0.9rem; }
+        button { background: #2563eb; color: white; border: none; padding: 1rem 2rem; border-radius: 2rem; font-size: 1.1rem; font-weight: bold; cursor: pointer; width: 100%; margin-top: 1rem; }
+        button.active { background: #dc2626; }
+        #status { margin-top: 1rem; font-size: 0.9rem; color: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>🎙️ AI Speech Coach</h2>
+        <p>Real-time conversational practice</p>
+        <input type="password" id="apiKey" placeholder="Paste Gemini API Key Here">
+        <button id="startBtn">Start Coaching Session</button>
+        <div id="status">Disconnected</div>
+    </div>
+
+    <script>
+        let ws = null;
+        let audioContext = null;
+        let isSessionActive = false;
+
+        const SYSTEM_PROMPT = `You are a world-class real-time conversational speech coach. 
+        Your goal is to help the user improve public speaking, conversational fluency, and eliminate filler words (like "um", "ah", "like").
+        Keep your spoken responses concise, energetic, and encouraging. 
+        If the user uses filler words or speaks too fast, gently offer a 1-sentence tip before continuing the conversation.`;
+
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            if (!apiKey) return alert("Please enter your Google AI Studio API Key.");
+
+            if (isSessionActive) {
+                stopSession();
+                return;
+            }
+
+            try {
+                // Initialize Web Audio
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                // Connect to Gemini 2.0 Multimodal Live API over WebSocket
+                const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => {
+                    document.getElementById('status').innerText = "Connected & Listening...";
+                    document.getElementById('startBtn').innerText = "End Session";
+                    document.getElementById('startBtn').classList.add('active');
+                    isSessionActive = true;
+
+                    // Send initial configuration to Google
+                    const setupMsg = {
+                        setup: {
+                            model: "models/gemini-2.0-flash-exp",
+                            responseModalities: ["AUDIO"],
+                            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }
+                        }
+                    };
+                    ws.send(JSON.stringify(setupMsg));
+
+                    // Stream microphone audio to WebSocket
+                    startAudioStreaming(stream);
+                };
+
+                ws.onmessage = async (event) => {
+                    const response = JSON.parse(event.data);
+                    // Extract and play live incoming audio from Gemini
+                    if (response.serverContent?.modelTurn?.parts) {
+                        for (let part of response.serverContent.modelTurn.parts) {
+                            if (part.inlineData && part.inlineData.mimeType.startsWith("audio/pcm")) {
+                                playRawPCM(part.inlineData.data);
+                            }
+                        }
+                    }
+                };
+
+                ws.onclose = () => stopSession();
+                ws.onerror = (err) => console.error("WebSocket Error:", err);
+
+            } catch (err) {
+                alert("Microphone access or WebSocket connection failed: " + err.message);
+            }
+        });
+
+        function startAudioStreaming(stream) {
+            const source = audioContext.createMediaStreamSource(stream);
+            const processor = audioContext.createScriptProcessor(512, 1, 1);
+            
+            processor.onaudioprocess = (e) => {
+                if (!isSessionActive || ws.readyState !== WebSocket.OPEN) return;
+                const inputData = e.inputBuffer.getChannelData(0);
+                // Convert 32-bit Float to 16-bit PCM for Gemini API
+                const pcm16 = new Int16Array(inputData.length);
+                for (let i = 0; i < inputData.length; i++) {
+                    pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+                }
+                const base64Audio = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
+                
+                ws.send(JSON.stringify({
+                    realtimeInput: { audio: { data: base64Audio, mimeType: "audio/pcm;rate=16000" } }
+                }));
+            };
+
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+        }
+
+        function playRawPCM(base64Data) {
+            // Decodes PCM audio payload and plays through iPhone speaker
+            const binary = atob(base64Data);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const pcm16 = new Int16Array(bytes.buffer);
+            
+            const buffer = audioContext.createBuffer(1, pcm16.length, 24000);
+            const channel = buffer.getChannelData(0);
+            for (let i = 0; i < pcm16.length; i++) channel[i] = pcm16[i] / 32768.0;
+
+            const source = audioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContext.destination);
+            source.start();
+        }
+
+        function stopSession() {
+            isSessionActive = false;
+            if (ws) ws.close();
+            if (audioContext) audioContext.close();
+            document.getElementById('status').innerText = "Disconnected";
+            document.getElementById('startBtn').innerText = "Start Coaching Session";
+            document.getElementById('startBtn').classList.remove('active');
+        }
+    </script>
+</body>
+</html>
