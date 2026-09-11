@@ -55,18 +55,28 @@
                     document.getElementById('startBtn').innerText = "End Session";
                     document.getElementById('startBtn').classList.add('active');
                     isSessionActive = true;
-
-                    // Send initial configuration to Google
+                
+                    // Fixed payload structure for Gemini Live API
                     const setupMsg = {
                         setup: {
                             model: "models/gemini-2.0-flash-exp",
-                            responseModalities: ["AUDIO"],
-                            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }
+                            generationConfig: {
+                                responseModalities: ["AUDIO"],
+                                speechConfig: {
+                                    voiceConfig: {
+                                        prebuiltVoiceConfig: {
+                                            voiceName: "Puck" // Options: Puck, Charon, Kore, Fenrir, Aoede
+                                        }
+                                    }
+                                }
+                            },
+                            systemInstruction: {
+                                parts: [{ text: SYSTEM_PROMPT }]
+                            }
                         }
                     };
+                    
                     ws.send(JSON.stringify(setupMsg));
-
-                    // Stream microphone audio to WebSocket
                     startAudioStreaming(stream);
                 };
 
@@ -110,7 +120,14 @@
                 const base64Audio = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
                 
                 ws.send(JSON.stringify({
-                    realtimeInput: { audio: { data: base64Audio, mimeType: "audio/pcm;rate=16000" } }
+                    realtimeInput: {
+                        mediaChunks: [
+                            {
+                                mimeType: "audio/pcm;rate=16000",
+                                data: base64Audio
+                            }
+                        ]
+                    }
                 }));
             };
 
