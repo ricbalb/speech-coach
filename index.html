@@ -84,7 +84,12 @@
 
                 ws.onclose = () => stopSession();
                 ws.onerror = (err) => console.error("WebSocket Error:", err);
-
+                ws.onerror = (err) => {
+                    document.getElementById('status').innerText = "Error connecting to Gemini API";
+                    };
+                ws.onclose = (event) => {
+                        document.getElementById('status').innerText = `Disconnected (Code: ${event.code})`;
+                    };
             } catch (err) {
                 alert("Microphone access or WebSocket connection failed: " + err.message);
             }
