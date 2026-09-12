@@ -46,8 +46,8 @@
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 document.getElementById('status').innerText = "Connecting to Gemini...";
 
-                // MUST BE v1alpha for Bidi WebSockets
-                const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+                // Active v1beta Bidi Endpoint
+                const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
                 ws = new WebSocket(wsUrl);
 
                 ws.onopen = () => {
@@ -56,10 +56,10 @@
                     document.getElementById('startBtn').classList.add('active');
                     isSessionActive = true;
 
-                    // Exact model ID for v1alpha Bidi endpoint
+                    // Active Live Model ID
                     const setupMsg = {
                         setup: {
-                            model: "models/gemini-2.0-flash-exp",
+                            model: "models/gemini-3.1-flash-live-preview",
                             generationConfig: {
                                 responseModalities: ["AUDIO"]
                             },
@@ -71,7 +71,6 @@
                     
                     ws.send(JSON.stringify(setupMsg));
 
-                    // Handshake buffer delay
                     setTimeout(() => {
                         if (isSessionActive && ws.readyState === WebSocket.OPEN) {
                             document.getElementById('status').innerText = "Listening... Speak now!";
