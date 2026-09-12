@@ -46,7 +46,7 @@
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 document.getElementById('status').innerText = "Connecting to Gemini...";
 
-                const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+                const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
                 ws = new WebSocket(wsUrl);
 
                 ws.onopen = () => {
@@ -58,7 +58,7 @@
                     // Clean setup payload without conflicting configs
                     const setupMsg = {
                         setup: {
-                            model: "models/gemini-2.0-flash-exp",
+                            model: "models/gemini-2.0-flash",
                             generationConfig: {
                                 responseModalities: ["AUDIO"]
                             },
