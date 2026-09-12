@@ -1,191 +1,276 @@
-let ws = null;
-let audioContext = null;
-let isSessionActive = false;
-let mediaProcessor = null;
-let mediaStream = null;      // Global reference to hardware stream
-let mediaSource = null;     // Global reference to audio source node
-let nextStartTime = 0;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Speech Coach</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background: #0f172a; 
+            color: #ffffff; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center; 
+            height: 100vh; 
+            margin: 0; 
+        }
+        .card { 
+            background: #1e293b; 
+            padding: 2rem; 
+            border-radius: 1rem; 
+            width: 85%; 
+            max-width: 400px; 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5); 
+            text-align: center; 
+        }
+        input { 
+            width: 90%; 
+            padding: 0.8rem; 
+            margin: 0.5rem 0; 
+            border-radius: 0.5rem; 
+            border: 1px solid #334155; 
+            background: #0f172a; 
+            color: #ffffff; 
+            font-size: 0.9rem; 
+            outline: none; 
+        }
+        button { 
+            background: #2563eb; 
+            color: white; 
+            border: none; 
+            padding: 1rem 2rem; 
+            border-radius: 2rem; 
+            font-size: 1.1rem; 
+            font-weight: bold; 
+            cursor: pointer; 
+            width: 100%; 
+            margin-top: 1rem; 
+            transition: background 0.2s ease; 
+        }
+        button.active { 
+            background: #dc2626; 
+        }
+        #status { 
+            margin-top: 1rem; 
+            font-size: 0.9rem; 
+            color: #94a3b8; 
+            word-break: break-word; 
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>🎙️ AI Speech Coach</h2>
+        <p>Real-time conversational practice</p>
+        <input type="password" id="apiKey" placeholder="Paste Gemini API Key Here">
+        <button id="startBtn">Start Coaching Session</button>
+        <div id="status">Disconnected</div>
+    </div>
 
-const SYSTEM_PROMPT = "You are a real-time speech coach. Help the user speak clearly and eliminate filler words. Keep responses concise and encouraging.";
+    <script>
+        // Global variables to prevent local scope masking and retain hardware handles
+        let ws = null;
+        let audioContext = null;
+        let isSessionActive = false;
+        let mediaProcessor = null;
+        let mediaStream = null;      // Hardware stream handle
+        let mediaSource = null;     // WebAudio source node handle
+        let nextStartTime = 0;       // Buffer queue alignment
 
-document.getElementById('startBtn').addEventListener('click', async () => {
-    const apiKey = document.getElementById('apiKey').value.trim();
-    if (!apiKey) return alert("Please enter your Gemini API Key.");
+        const SYSTEM_PROMPT = "You are a real-time speech coach. Help the user speak clearly and eliminate filler words. Keep responses concise and encouraging.";
 
-    if (isSessionActive) {
-        stopSession();
-        return;
-    }
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            if (!apiKey) return alert("Please enter your Gemini API Key.");
 
-    try {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-        await audioContext.resume();
-        nextStartTime = audioContext.currentTime;
+            if (isSessionActive) {
+                stopSession();
+                return;
+            }
 
-        // FIX 1: Assign directly to global 'mediaStream' (NO 'const' or 'let')
-        mediaStream = await navigator.mediaDevices.getUserMedia({ 
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-                sampleRate: 16000
-            } 
+            try {
+                // Initialize Web Audio context during primary user tap
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                await audioContext.resume();
+                nextStartTime = audioContext.currentTime;
+
+                // Request hardware mic stream directly into global reference
+                mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        sampleRate: 16000
+                    } 
+                });
+
+                document.getElementById('status').innerText = "Connecting to Gemini...";
+
+                // Live WebSocket Endpoint
+                const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => {
+                    document.getElementById('status').innerText = "Connected! Initializing session...";
+                    document.getElementById('startBtn').innerText = "End Session";
+                    document.getElementById('startBtn').classList.add('active');
+                    isSessionActive = true;
+
+                    // Handshake frame setup
+                    const setupMsg = {
+                        setup: {
+                            model: "models/gemini-2.0-flash-exp",
+                            generationConfig: {
+                                responseModalities: ["AUDIO"]
+                            },
+                            systemInstruction: {
+                                parts: [{ text: SYSTEM_PROMPT }]
+                            }
+                        }
+                    };
+                    
+                    ws.send(JSON.stringify(setupMsg));
+
+                    // Buffer delay before sending PCM data
+                    setTimeout(() => {
+                        if (isSessionActive && ws.readyState === WebSocket.OPEN) {
+                            document.getElementById('status').innerText = "Listening... Speak now!";
+                            startAudioStreaming(mediaStream);
+                        }
+                    }, 500);
+                };
+
+                ws.onmessage = async (event) => {
+                    try {
+                        let data = event.data;
+                        if (data instanceof Blob) {
+                            data = await data.text();
+                        }
+                        const response = JSON.parse(data);
+                        if (response.serverContent?.modelTurn?.parts) {
+                            for (let part of response.serverContent.modelTurn.parts) {
+                                if (part.inlineData && part.inlineData.mimeType.startsWith("audio/pcm")) {
+                                    playRawPCM(part.inlineData.data);
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Parse Error:", e);
+                    }
+                };
+
+                ws.onclose = (e) => {
+                    console.log("Closed:", e);
+                    document.getElementById('status').innerText = `Disconnected (Code: ${e.code}${e.reason ? ' - ' + e.reason : ''})`;
+                    stopSession();
+                };
+                
+                ws.onerror = (err) => {
+                    console.error("WS Error:", err);
+                    document.getElementById('status').innerText = "Connection Error";
+                };
+
+            } catch (err) {
+                alert("Microphone/Audio Error: " + err.message);
+                stopSession();
+            }
         });
 
-        document.getElementById('status').innerText = "Connecting to Gemini...";
-
-        const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
-        ws = new WebSocket(wsUrl);
-
-        ws.onopen = () => {
-            document.getElementById('status').innerText = "Connected! Initializing session...";
-            document.getElementById('startBtn').innerText = "End Session";
-            document.getElementById('startBtn').classList.add('active');
-            isSessionActive = true;
-
-            const setupMsg = {
-                setup: {
-                    model: "models/gemini-3.1-flash-live-preview",
-                    generationConfig: {
-                        responseModalities: ["AUDIO"]
-                    },
-                    systemInstruction: {
-                        parts: [{ text: SYSTEM_PROMPT }]
-                    }
-                }
-            };
+        function startAudioStreaming(stream) {
+            mediaSource = audioContext.createMediaStreamSource(stream);
+            mediaProcessor = audioContext.createScriptProcessor(512, 1, 1);
             
-            ws.send(JSON.stringify(setupMsg));
+            mediaProcessor.onaudioprocess = (e) => {
+                if (!isSessionActive || !ws || ws.readyState !== WebSocket.OPEN) return;
+                
+                // Pause mic payload generation while Gemini is actively speaking back
+                if (audioContext.currentTime < nextStartTime) return;
 
-            setTimeout(() => {
-                if (isSessionActive && ws.readyState === WebSocket.OPEN) {
-                    document.getElementById('status').innerText = "Listening... Speak now!";
-                    startAudioStreaming(mediaStream); // Pass global stream
+                const inputData = e.inputBuffer.getChannelData(0);
+                const pcm16 = new Int16Array(inputData.length);
+                for (let i = 0; i < inputData.length; i++) {
+                    pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
                 }
-            }, 500);
-        };
-
-        ws.onmessage = async (event) => {
-            try {
-                let data = event.data;
-                if (data instanceof Blob) {
-                    data = await data.text();
-                }
-                const response = JSON.parse(data);
-                if (response.serverContent?.modelTurn?.parts) {
-                    for (let part of response.serverContent.modelTurn.parts) {
-                        if (part.inlineData && part.inlineData.mimeType.startsWith("audio/pcm")) {
-                            playRawPCM(part.inlineData.data);
+                const base64Audio = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
+                
+                ws.send(JSON.stringify({
+                    realtimeInput: {
+                        audio: {
+                            mimeType: "audio/pcm;rate=16000",
+                            data: base64Audio
                         }
                     }
-                }
-            } catch (e) {
-                console.error("Parse Error:", e);
-            }
-        };
+                }));
+            };
 
-        ws.onclose = (e) => {
-            console.log("Closed:", e);
-            document.getElementById('status').innerText = `Disconnected (Code: ${e.code}${e.reason ? ' - ' + e.reason : ''})`;
-            stopSession();
-        };
-        
-        ws.onerror = (err) => {
-            console.error("WS Error:", err);
-            document.getElementById('status').innerText = "Connection Error";
-        };
-
-    } catch (err) {
-        alert("Microphone/Audio Error: " + err.message);
-    }
-});
-
-function startAudioStreaming(stream) {
-    // FIX 2: Store media source globally so we can disconnect it
-    mediaSource = audioContext.createMediaStreamSource(stream);
-    mediaProcessor = audioContext.createScriptProcessor(512, 1, 1);
-    
-    mediaProcessor.onaudioprocess = (e) => {
-        if (!isSessionActive || !ws || ws.readyState !== WebSocket.OPEN) return;
-        
-        if (audioContext.currentTime < nextStartTime) return;
-
-        const inputData = e.inputBuffer.getChannelData(0);
-        const pcm16 = new Int16Array(inputData.length);
-        for (let i = 0; i < inputData.length; i++) {
-            pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+            mediaSource.connect(mediaProcessor);
+            mediaProcessor.connect(audioContext.destination);
         }
-        const base64Audio = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
-        
-        ws.send(JSON.stringify({
-            realtimeInput: {
-                audio: {
-                    mimeType: "audio/pcm;rate=16000",
-                    data: base64Audio
-                }
+
+        function playRawPCM(base64Data) {
+            const binary = atob(base64Data);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const pcm16 = new Int16Array(bytes.buffer);
+            
+            // Convert raw 24kHz incoming PCM
+            const buffer = audioContext.createBuffer(1, pcm16.length, 24000);
+            const channel = buffer.getChannelData(0);
+            for (let i = 0; i < pcm16.length; i++) channel[i] = pcm16[i] / 32768.0;
+
+            const source = audioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContext.destination);
+
+            // Queue audio sequential playback
+            const startTime = Math.max(audioContext.currentTime, nextStartTime);
+            source.start(startTime);
+            nextStartTime = startTime + buffer.duration;
+        }
+
+        function stopSession() {
+            isSessionActive = false;
+
+            // 1. Release hardware microphone tracks completely
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => {
+                    track.stop();
+                    track.enabled = false;
+                });
+                mediaStream = null;
             }
-        }));
-    };
 
-    mediaSource.connect(mediaProcessor);
-    mediaProcessor.connect(audioContext.destination);
-}
+            // 2. Disconnect audio graph nodes
+            if (mediaSource) {
+                mediaSource.disconnect();
+                mediaSource = null;
+            }
 
-function playRawPCM(base64Data) {
-    const binary = atob(base64Data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const pcm16 = new Int16Array(bytes.buffer);
-    
-    const buffer = audioContext.createBuffer(1, pcm16.length, 24000);
-    const channel = buffer.getChannelData(0);
-    for (let i = 0; i < pcm16.length; i++) channel[i] = pcm16[i] / 32768.0;
+            if (mediaProcessor) {
+                mediaProcessor.onaudioprocess = null;
+                mediaProcessor.disconnect();
+                mediaProcessor = null;
+            }
 
-    const source = audioContext.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioContext.destination);
+            // 3. Terminate WebSocket
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
 
-    const startTime = Math.max(audioContext.currentTime, nextStartTime);
-    source.start(startTime);
-    nextStartTime = startTime + buffer.duration;
-}
+            // 4. Close WebAudio context
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
 
-function stopSession() {
-    isSessionActive = false;
-
-    // FIX 3: Stop all hardware tracks explicitly
-    if (mediaStream) {
-        mediaStream.getTracks().forEach(track => {
-            track.stop();
-            track.enabled = false;
-        });
-        mediaStream = null;
-    }
-
-    // FIX 4: Disconnect all audio nodes
-    if (mediaSource) {
-        mediaSource.disconnect();
-        mediaSource = null;
-    }
-
-    if (mediaProcessor) {
-        mediaProcessor.onaudioprocess = null; // Unbind processing handler
-        mediaProcessor.disconnect();
-        mediaProcessor = null;
-    }
-
-    if (ws) {
-        ws.close();
-        ws = null;
-    }
-
-    if (audioContext) {
-        audioContext.close();
-        audioContext = null;
-    }
-
-    nextStartTime = 0;
-    document.getElementById('startBtn').innerText = "Start Coaching Session";
-    document.getElementById('startBtn').classList.remove('active');
-    document.getElementById('status').innerText = "Disconnected";
-}
+            nextStartTime = 0;
+            document.getElementById('startBtn').innerText = "Start Coaching Session";
+            document.getElementById('startBtn').classList.remove('active');
+            document.getElementById('status').innerText = "Disconnected";
+        }
+    </script>
+</body>
+</html>
