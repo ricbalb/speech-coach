@@ -10,7 +10,7 @@
         input { width: 90%; padding: 0.8rem; margin: 0.5rem 0; border-radius: 0.5rem; border: none; font-size: 0.9rem; }
         button { background: #2563eb; color: white; border: none; padding: 1rem 2rem; border-radius: 2rem; font-size: 1.1rem; font-weight: bold; cursor: pointer; width: 100%; margin-top: 1rem; }
         button.active { background: #dc2626; }
-        #status { margin-top: 1rem; font-size: 0.9rem; color: #94a3b8; }
+        #status { margin-top: 1rem; font-size: 0.9rem; color: #94a3b8; word-break: break-word; }
     </style>
 </head>
 <body>
@@ -27,14 +27,11 @@
         let audioContext = null;
         let isSessionActive = false;
 
-        const SYSTEM_PROMPT = `You are a world-class real-time conversational speech coach. 
-        Your goal is to help the user improve public speaking, conversational fluency, and eliminate filler words (like "um", "ah", "like").
-        Keep your spoken responses concise, energetic, and encouraging. 
-        If the user uses filler words or speaks too fast, gently offer a 1-sentence tip before continuing the conversation.`;
+        const SYSTEM_PROMPT = `You are a real-time speech coach. Help the user speak clearly and eliminate filler words. Keep responses short and conversational.`;
 
         document.getElementById('startBtn').addEventListener('click', async () => {
             const apiKey = document.getElementById('apiKey').value.trim();
-            if (!apiKey) return alert("Please enter your Google AI Studio API Key.");
+            if (!apiKey) return alert("Please enter your Gemini API Key.");
 
             if (isSessionActive) {
                 stopSession();
@@ -42,11 +39,11 @@
             }
 
             try {
-                // Initialize Web Audio
                 audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                await audioContext.resume();
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 
-                // Connect to Gemini 2.0 Multimodal Live API over WebSocket
+                // Using v1alpha Bidirectional Endpoint
                 const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
                 ws = new WebSocket(wsUrl);
 
@@ -55,18 +52,15 @@
                     document.getElementById('startBtn').innerText = "End Session";
                     document.getElementById('startBtn').classList.add('active');
                     isSessionActive = true;
-                
-                    // Fixed payload structure for Gemini Live API
+
                     const setupMsg = {
                         setup: {
-                            model: "models/gemini-2.0-flash",
+                            model: "models/gemini-2.0-flash-exp",
                             generationConfig: {
                                 responseModalities: ["AUDIO"],
                                 speechConfig: {
                                     voiceConfig: {
-                                        prebuiltVoiceConfig: {
-                                            voiceName: "Puck" // Options: Puck, Charon, Kore, Fenrir, Aoede
-                                        }
+                                        prebuiltVoiceConfig: { voiceName: "Puck" }
                                     }
                                 }
                             },
@@ -75,14 +69,12 @@
                             }
                         }
                     };
-                    
                     ws.send(JSON.stringify(setupMsg));
                     startAudioStreaming(stream);
                 };
 
                 ws.onmessage = async (event) => {
                     const response = JSON.parse(event.data);
-                    // Extract and play live incoming audio from Gemini
                     if (response.serverContent?.modelTurn?.parts) {
                         for (let part of response.serverContent.modelTurn.parts) {
                             if (part.inlineData && part.inlineData.mimeType.startsWith("audio/pcm")) {
@@ -92,16 +84,19 @@
                     }
                 };
 
-                ws.onclose = () => stopSession();
-                ws.onerror = (err) => console.error("WebSocket Error:", err);
+                ws.onclose = (e) => {
+                    console.log("Closed:", e);
+                    document.getElementById('status').innerText = `Disconnected (Code: ${e.code})`;
+                    stopSession();
+                };
+                
                 ws.onerror = (err) => {
-                    document.getElementById('status').innerText = "Error connecting to Gemini API";
-                    };
-                ws.onclose = (event) => {
-                        document.getElementById('status').innerText = `Disconnected (Code: ${event.code})`;
-                    };
+                    console.error("WS Error:", err);
+                    document.getElementById('status').innerText = "Connection Error";
+                };
+
             } catch (err) {
-                alert("Microphone access or WebSocket connection failed: " + err.message);
+                alert("Microphone or Audio error: " + err.message);
             }
         });
 
@@ -112,13 +107,13 @@
             processor.onaudioprocess = (e) => {
                 if (!isSessionActive || ws.readyState !== WebSocket.OPEN) return;
                 const inputData = e.inputBuffer.getChannelData(0);
-                // Convert 32-bit Float to 16-bit PCM for Gemini API
                 const pcm16 = new Int16Array(inputData.length);
                 for (let i = 0; i < inputData.length; i++) {
                     pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
                 }
                 const base64Audio = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
                 
+                // Fixed mediaChunks Payload Structure
                 ws.send(JSON.stringify({
                     realtimeInput: {
                         mediaChunks: [
@@ -136,7 +131,6 @@
         }
 
         function playRawPCM(base64Data) {
-            // Decodes PCM audio payload and plays through iPhone speaker
             const binary = atob(base64Data);
             const bytes = new Uint8Array(binary.length);
             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -156,7 +150,6 @@
             isSessionActive = false;
             if (ws) ws.close();
             if (audioContext) audioContext.close();
-            document.getElementById('status').innerText = "Disconnected";
             document.getElementById('startBtn').innerText = "Start Coaching Session";
             document.getElementById('startBtn').classList.remove('active');
         }
