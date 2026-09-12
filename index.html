@@ -17,7 +17,7 @@
     <div class="card">
         <h2>🎙️ AI Speech Coach</h2>
         <p>Real-time conversational practice</p>
-        <input type="password" id="apiKey" placeholder="Paste Gemini API Key Here">
+        <input type="password" id="apiKey" placeholder="Paste AQ... Gemini API Key Here">
         <button id="startBtn">Start Coaching Session</button>
         <div id="status">Disconnected</div>
     </div>
@@ -27,7 +27,7 @@
         let audioContext = null;
         let isSessionActive = false;
 
-        const SYSTEM_PROMPT = `You are a real-time speech coach. Help the user speak clearly and eliminate filler words. Keep responses short and conversational.`;
+        const SYSTEM_PROMPT = `You are a real-time speech coach. Help the user speak clearly and eliminate filler words. Keep responses short, encouraging, and conversational.`;
 
         document.getElementById('startBtn').addEventListener('click', async () => {
             const apiKey = document.getElementById('apiKey').value.trim();
@@ -39,11 +39,14 @@
             }
 
             try {
+                // Initialize Web Audio (Safari require resume on user tap)
                 audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
                 await audioContext.resume();
+
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                
-                // Using v1alpha Bidirectional Endpoint
+                document.getElementById('status').innerText = "Connecting to Gemini...";
+
+                // Connecting to v1alpha Live WebSocket endpoint with query auth
                 const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
                 ws = new WebSocket(wsUrl);
 
@@ -53,6 +56,7 @@
                     document.getElementById('startBtn').classList.add('active');
                     isSessionActive = true;
 
+                    // Handshake setup frame for AQ. keys
                     const setupMsg = {
                         setup: {
                             model: "models/gemini-2.0-flash-exp",
@@ -74,13 +78,21 @@
                 };
 
                 ws.onmessage = async (event) => {
-                    const response = JSON.parse(event.data);
-                    if (response.serverContent?.modelTurn?.parts) {
-                        for (let part of response.serverContent.modelTurn.parts) {
-                            if (part.inlineData && part.inlineData.mimeType.startsWith("audio/pcm")) {
-                                playRawPCM(part.inlineData.data);
+                    try {
+                        let data = event.data;
+                        if (data instanceof Blob) {
+                            data = await data.text();
+                        }
+                        const response = JSON.parse(data);
+                        if (response.serverContent?.modelTurn?.parts) {
+                            for (let part of response.serverContent.modelTurn.parts) {
+                                if (part.inlineData && part.inlineData.mimeType.startsWith("audio/pcm")) {
+                                    playRawPCM(part.inlineData.data);
+                                }
                             }
                         }
+                    } catch (e) {
+                        console.error("Message Parsing Error:", e);
                     }
                 };
 
@@ -92,7 +104,7 @@
                 
                 ws.onerror = (err) => {
                     console.error("WS Error:", err);
-                    document.getElementById('status').innerText = "Connection Error";
+                    document.getElementById('status').innerText = "Connection Failed";
                 };
 
             } catch (err) {
@@ -105,7 +117,7 @@
             const processor = audioContext.createScriptProcessor(512, 1, 1);
             
             processor.onaudioprocess = (e) => {
-                if (!isSessionActive || ws.readyState !== WebSocket.OPEN) return;
+                if (!isSessionActive || !ws || ws.readyState !== WebSocket.OPEN) return;
                 const inputData = e.inputBuffer.getChannelData(0);
                 const pcm16 = new Int16Array(inputData.length);
                 for (let i = 0; i < inputData.length; i++) {
@@ -113,7 +125,6 @@
                 }
                 const base64Audio = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
                 
-                // Fixed mediaChunks Payload Structure
                 ws.send(JSON.stringify({
                     realtimeInput: {
                         mediaChunks: [
