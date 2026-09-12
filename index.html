@@ -46,7 +46,6 @@
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 document.getElementById('status').innerText = "Connecting to Gemini...";
 
-                // Active v1beta Bidi Endpoint
                 const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
                 ws = new WebSocket(wsUrl);
 
@@ -56,7 +55,6 @@
                     document.getElementById('startBtn').classList.add('active');
                     isSessionActive = true;
 
-                    // Active Live Model ID
                     const setupMsg = {
                         setup: {
                             model: "models/gemini-3.1-flash-live-preview",
@@ -127,14 +125,13 @@
                 }
                 const base64Audio = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
                 
+                // Updated real-time audio schema
                 ws.send(JSON.stringify({
                     realtimeInput: {
-                        mediaChunks: [
-                            {
-                                mimeType: "audio/pcm;rate=16000",
-                                data: base64Audio
-                            }
-                        ]
+                        audio: {
+                            mimeType: "audio/pcm;rate=16000",
+                            data: base64Audio
+                        }
                     }
                 }));
             };
