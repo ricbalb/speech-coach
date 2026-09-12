@@ -47,7 +47,7 @@
                 nextStartTime = audioContext.currentTime;
 
                 // Enforce browser-level echo cancellation and noise suppression
-                const stream = await navigator.mediaDevices.getUserMedia({ 
+                stream = await navigator.mediaDevices.getUserMedia({ 
                     audio: {
                         echoCancellation: true,
                         noiseSuppression: true,
