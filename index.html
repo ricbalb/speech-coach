@@ -28,6 +28,7 @@
         let isSessionActive = false;
         let mediaProcessor = null;
         let nextStartTime = 0; // Tracks playback queue timing
+        let mediaStream = null; // Track hardware mic stream
 
         const SYSTEM_PROMPT = "You are a real-time speech coach. Help the user speak clearly and eliminate filler words. Keep responses concise and encouraging.";
 
@@ -177,11 +178,33 @@
 
         function stopSession() {
             isSessionActive = false;
-            if (ws) ws.close();
-            if (audioContext) audioContext.close();
+            
+            // 1. Close WebSocket connection
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        
+            // 2. Shut down Web Audio processing nodes
+            if (mediaProcessor) {
+                mediaProcessor.disconnect();
+                mediaProcessor = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+        
+            // 3. Explicitly stop the hardware microphone tracks
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+        
             nextStartTime = 0;
             document.getElementById('startBtn').innerText = "Start Coaching Session";
             document.getElementById('startBtn').classList.remove('active');
+            document.getElementById('status').innerText = "Disconnected";
         }
     </script>
 </body>
